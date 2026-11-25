@@ -12,6 +12,7 @@ Every test exercises an operation and then checks its effect: a write is read ba
 | **AWS S3** | Default | Access key + secret |
 | **Cloudflare R2** | `https://<account-id>.r2.cloudflarestorage.com` | Access key + secret |
 | **Google Cloud Storage** | `https://storage.googleapis.com` | HMAC key + secret |
+| **Neon Object Storage** | `https://<branch-id>.storage.<cell>.<region>.aws.neon.tech` (path-style) | Neon credential (`token_id` + `s3_secret_access_key`) |
 
 ## Setup
 
@@ -40,9 +41,15 @@ R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 # Google Cloud Storage (S3-compatible HMAC)
 GCS_ACCESS_KEY_ID=               # Create HMAC keys in GCS console
 GCS_SECRET_ACCESS_KEY=
+
+# Neon Object Storage
+NEON_STORAGE_ENDPOINT=           # branch S3 endpoint, from the Connect dialog's Storage tab
+NEON_STORAGE_REGION=us-east-2    # optional, defaults to us-east-2
+NEON_STORAGE_ACCESS_KEY_ID=      # credential token_id (nak_live_...)
+NEON_STORAGE_SECRET_ACCESS_KEY=  # credential s3_secret_access_key (nsk_live_...)
 ```
 
-Only providers with both access key and secret key set will be tested.
+For Neon, create a credential with `storage:read` and `storage:write` scopes on the branch you want to test (`neon credentials create --scope storage:read --scope storage:write`). The env vars use a `NEON_STORAGE_` prefix rather than the `AWS_*` names `neon env pull` writes, because the AWS SDK reads `AWS_ENDPOINT_URL_S3` from the environment and would point the `aws` provider at Neon too.
 
 ## Usage
 
@@ -66,7 +73,7 @@ Each run creates a bucket named `s3compat-<provider>-<random>` and a second buck
 
 Versioning tests run against the second bucket. The runner creates it the way the provider supports:
 
-- On AWS, R2 and GCS: `CreateBucket`, then `PutBucketVersioning` with `Status=Enabled`.
+- On AWS, R2, GCS and Neon: `CreateBucket`, then `PutBucketVersioning` with `Status=Enabled`.
 - On Tigris, versioning is a creation-time property, so `CreateBucket` is sent with the `X-Tigris-Enable-Snapshot: true` header (`Provider.VersionedBucketHeaders`).
 
 If the provider cannot create a versioned bucket, the versioning tests are reported as `skip` with the reason.

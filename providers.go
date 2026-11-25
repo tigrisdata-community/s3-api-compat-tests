@@ -217,6 +217,19 @@ func LoadProviders(names []string) []Provider {
 
 			ChecksumsOnlyWhenRequired: true,
 		},
+		{
+			// Neon Object Storage: each Neon branch has its own S3 endpoint
+			// (https://<branch-id>.storage.<cell>.<region>.aws.neon.tech) and
+			// only path-style addressing is supported. The access key is the
+			// credential's token_id (nak_live_...) and the secret is its
+			// s3_secret_access_key (nsk_live_...).
+			Name:      "neon",
+			Endpoint:  os.Getenv("NEON_STORAGE_ENDPOINT"),
+			Region:    envOr("NEON_STORAGE_REGION", "us-east-2"),
+			PathStyle: true,
+			AccessKey: os.Getenv("NEON_STORAGE_ACCESS_KEY_ID"),
+			SecretKey: os.Getenv("NEON_STORAGE_SECRET_ACCESS_KEY"),
+		},
 	}
 
 	// Filter to requested names, or return all configured.
@@ -231,6 +244,12 @@ func LoadProviders(names []string) []Provider {
 			continue
 		}
 		if len(want) > 0 && !want[p.Name] {
+			continue
+		}
+		// Only AWS has a default endpoint. Without one, the SDK would send
+		// this provider's credentials to AWS S3.
+		if p.Endpoint == "" && p.Name != "aws" {
+			fmt.Fprintf(os.Stderr, "skipping %s: credentials set but no endpoint configured\n", p.Name)
 			continue
 		}
 		out = append(out, p)
