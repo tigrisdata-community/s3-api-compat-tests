@@ -26,6 +26,7 @@ cp .env.example .env
 # Tigris
 TIGRIS_ACCESS_KEY_ID=
 TIGRIS_SECRET_ACCESS_KEY=
+TIGRIS_STS_ENDPOINT=             # optional, defaults to https://sts.storage.dev
 
 # AWS S3
 AWS_S3_ACCESS_KEY_ID=
@@ -73,6 +74,16 @@ If the provider cannot create a versioned bucket, the versioning tests are repor
 
 The separate `PutBucketVersioning` test in the bucket category turns versioning on for the plain test bucket. Providers where versioning cannot be enabled after creation fail that one test only.
 
+## How temporary credentials are tested
+
+The sts category calls the provider's AWS STS endpoint with the long-lived key: `GetFederationToken` with an inline policy that names the test bucket. It then signs S3 requests with the returned access key, secret and session token, and checks that S3 allows what the policy names and refuses the rest.
+
+- On Tigris the STS endpoint is `https://sts.storage.dev` (`TIGRIS_STS_ENDPOINT` overrides it).
+- On AWS it is the STS endpoint of `AWS_S3_REGION`. The key must belong to an IAM user that may call `sts:GetFederationToken`.
+- R2 and GCS have no STS endpoint, so the category is reported as `skip`.
+
+Two sessions are minted per run, one read-write and one read-only, each for 900 seconds, the shortest lifetime STS issues. Expiry is not tested, because it would take 15 minutes.
+
 ## Consistency expectations
 
 Object operations are checked immediately: S3 gives read-after-write and read-after-delete consistency for objects, so a GET after a DELETE must be 404 at once.
@@ -83,7 +94,7 @@ A GET after a bucket-configuration delete must fail with the S3 error code for a
 
 ## Operations Tested
 
-**94 tests** across 5 categories:
+**111 tests** across 6 categories:
 
 ### Object (37)
 PutObject (round trip of ETag and length; metadata; SHA-256 checksum echoed; a wrong SHA-256 checksum rejected; SSE-S3 reported back; a non-default storage class reported back), GetObject (body; missing key is 404 NoSuchKey; Range with Content-Range), HeadObject, DeleteObject (gone afterwards; deleting a missing key succeeds), CopyObject (body; MetadataDirective=REPLACE; x-amz-copy-source-if-match with a matching and a wrong ETag; conditional copy of a multipart object with its composite ETag), RenameObject (source gone, destination has the body; If-None-Match: * on an existing destination is 412; a source with a leading slash or the bucket name in front is a different key: 404 NoSuchKey when it does not exist, renamed when it does), conditional GETs (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since, each with a case that must read and a case that must be 304 or 412), conditional writes (PutObject with If-None-Match: * and with If-Match, each with the refused case), object tagging (put read back, get, delete leaves no tags), object ACL (put read back, get), ListObjects, ListObjectsV2 (basic with sizes and ETags, pagination to the end, delimiter with common prefixes and a top-level key, start-after), DeleteObjects (verbose and quiet, objects gone), RestoreObject
@@ -99,6 +110,9 @@ CreateMultipartUpload (listed afterwards), UploadPart (ETag), ListParts (number,
 
 ### Presigned URLs (6)
 PresignPutObject (stored), PresignGetObject (body), PresignHeadObject (Content-Length), PresignDeleteObject (gone afterwards), PresignUploadPart (part listed), PresignPostObject (browser form upload stored)
+
+### STS (17), on a provider with an STS endpoint
+GetCallerIdentity, GetFederationToken (credentials with a session token, expiration 900 seconds away, the federated user named; DurationSeconds below 900 is ValidationError; a policy that is not JSON is MalformedPolicyDocument), a session calling GetCallerIdentity (federated user ARN), PutObject (read back with the long-lived key), GetObject and HeadObject, ListObjectsV2, DeleteObject (gone afterwards), a multipart upload, a presigned GET (the URL carries X-Amz-Security-Token), and the refusals: an action the policy does not name (AccessDenied, nothing stored), a bucket the policy does not name (AccessDenied), ListBuckets (AccessDenied), the session key without its token (InvalidAccessKeyId), an altered token (InvalidToken), GetFederationToken signed with a session (AccessDenied)
 
 ## Output Format
 

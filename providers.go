@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -42,6 +43,12 @@ type Provider struct {
 	// property. When empty, the runner enables versioning with
 	// PutBucketVersioning after creating the bucket.
 	VersionedBucketHeaders map[string]string
+
+	// HasSTS says the provider serves the AWS STS query API, which mints the
+	// temporary credentials the sts category signs S3 requests with.
+	// STSEndpoint is where; empty means the AWS endpoint of the region.
+	HasSTS      bool
+	STSEndpoint string
 }
 
 // stripSDKHeadersMiddleware removes SDK-specific headers before signing.
@@ -88,13 +95,27 @@ func (stripSDKHeadersMiddleware) HandleFinalize(
 
 // NewClient builds an s3.Client for this provider.
 func (p *Provider) NewClient(ctx context.Context) (*s3.Client, error) {
-	creds := credentials.NewStaticCredentialsProvider(p.AccessKey, p.SecretKey, "")
+	return p.newClient(ctx, p.AccessKey, p.SecretKey, "")
+}
+
+// loadConfig returns an SDK config that signs with the given credential and
+// nothing from the environment. sessionToken is empty for a long-lived key.
+func (p *Provider) loadConfig(ctx context.Context, accessKey, secretKey, sessionToken string) (aws.Config, error) {
+	creds := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithCredentialsProvider(creds),
 		config.WithRegion(p.Region),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("load config for %s: %w", p.Name, err)
+		return cfg, fmt.Errorf("load config for %s: %w", p.Name, err)
+	}
+	return cfg, nil
+}
+
+func (p *Provider) newClient(ctx context.Context, accessKey, secretKey, sessionToken string) (*s3.Client, error) {
+	cfg, err := p.loadConfig(ctx, accessKey, secretKey, sessionToken)
+	if err != nil {
+		return nil, err
 	}
 
 	return s3.NewFromConfig(cfg, func(o *s3.Options) {
@@ -128,6 +149,24 @@ func (p *Provider) NewPresignClient(ctx context.Context) (*s3.PresignClient, err
 		return nil, err
 	}
 	return s3.NewPresignClient(client), nil
+}
+
+// NewSTSClient builds an STS client signed with the given credential, or
+// returns nil when the provider has no STS.
+func (p *Provider) NewSTSClient(ctx context.Context, accessKey, secretKey, sessionToken string) (*sts.Client, error) {
+	if !p.HasSTS {
+		return nil, nil
+	}
+	cfg, err := p.loadConfig(ctx, accessKey, secretKey, sessionToken)
+	if err != nil {
+		return nil, err
+	}
+	return sts.NewFromConfig(cfg, func(o *sts.Options) {
+		if p.STSEndpoint != "" {
+			o.BaseEndpoint = aws.String(p.STSEndpoint)
+		}
+		o.Region = p.Region
+	}), nil
 }
 
 // CreateVersionedBucket creates a bucket with object versioning enabled, the
@@ -189,6 +228,8 @@ func LoadProviders(names []string) []Provider {
 			SecretKey: firstEnv("TIGRIS_SECRET_ACCESS_KEY", "TIGRIS_STORAGE_SECRET_ACCESS_KEY"),
 			// Versioning is a creation-time property on Tigris.
 			VersionedBucketHeaders: map[string]string{"X-Tigris-Enable-Snapshot": "true"},
+			HasSTS:                 true,
+			STSEndpoint:            envOr("TIGRIS_STS_ENDPOINT", "https://sts.storage.dev"),
 		},
 		{
 			Name:      "aws",
@@ -197,6 +238,7 @@ func LoadProviders(names []string) []Provider {
 			PathStyle: false,
 			AccessKey: os.Getenv("AWS_S3_ACCESS_KEY_ID"),
 			SecretKey: os.Getenv("AWS_S3_SECRET_ACCESS_KEY"),
+			HasSTS:    true,
 		},
 		{
 			Name:      "r2",
