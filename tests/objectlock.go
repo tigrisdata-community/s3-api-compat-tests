@@ -178,7 +178,7 @@ func testGetObjectLockConfigurationNotConfigured(ctx context.Context, env *Env) 
 	_, err := env.Client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{
 		Bucket: aws.String(env.Bucket),
 	})
-	return expectFailure(err, "GetObjectLockConfiguration on a bucket without Object Lock", 404, "ObjectLockConfigurationNotFoundError")
+	return expectFailure(err, "GetObjectLockConfiguration on a bucket without Object Lock", 0, "ObjectLockConfigurationNotFoundError")
 }
 
 // PutObjectRetention sets a retention that GetObjectRetention and HeadObject
@@ -340,10 +340,20 @@ func testDeleteObjectLockedVersion(ctx context.Context, env *Env) TestResult {
 	if r := expectFailure(err, "DeleteObject of a locked version", 403, "AccessDenied"); r.Status != StatusPass {
 		return r
 	}
-	if _, err := env.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	out, err := env.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(env.LockBucket), Key: aws.String(key),
-	}); err != nil {
+	})
+	if err != nil {
 		return Fail("DeleteObject without a version id on a locked object: " + err.Error())
+	}
+	if !aws.ToBool(out.DeleteMarker) {
+		return Fail("DeleteObject without a version id on a locked object did not report a delete marker")
+	}
+	_, err = env.Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(env.LockBucket), Key: aws.String(key),
+	})
+	if r := expectFailure(err, "HeadObject of the key after the delete marker", 404); r.Status != StatusPass {
+		return r
 	}
 	ok, err := versionExists(ctx, env, key, v)
 	if err != nil {
