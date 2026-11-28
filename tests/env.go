@@ -26,6 +26,13 @@ type Env struct {
 	// versioning tests then skip and VersionedBucketErr says why.
 	VersionedBucket    string
 	VersionedBucketErr string
+
+	// LockBucket is a third bucket created with S3 Object Lock enabled
+	// (CreateBucket with x-amz-bucket-object-lock-enabled). Empty when the
+	// provider could not create one; the object lock tests then skip and
+	// LockBucketErr says why.
+	LockBucket    string
+	LockBucketErr string
 }
 
 // TestDef defines a single test to run.

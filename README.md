@@ -60,7 +60,7 @@ go run . --providers=tigris --tests=PutObject,GetObject,RenameObject
 go run . --providers=tigris --output=tigris-results.json
 ```
 
-Each run creates a bucket named `s3compat-<provider>-<random>` and a second bucket `…-v` with object versioning enabled, runs every test, and deletes both buckets. Every test creates what it needs and cleans up after itself, so any subset selected with `--tests` runs on its own.
+Each run creates a bucket named `s3compat-<provider>-<random>`, a second bucket `…-v` with object versioning enabled and a third bucket `…-l` with Object Lock enabled, runs every test, and deletes all three. Every test creates what it needs and cleans up after itself, so any subset selected with `--tests` runs on its own.
 
 ## How the versioned bucket is created
 
@@ -73,6 +73,12 @@ If the provider cannot create a versioned bucket, the versioning tests are repor
 
 The separate `PutBucketVersioning` test in the bucket category turns versioning on for the plain test bucket. Providers where versioning cannot be enabled after creation fail that one test only.
 
+## How the Object Lock bucket is created
+
+Object Lock tests run against the third bucket, created with `CreateBucket` and `x-amz-bucket-object-lock-enabled: true` on every provider. The runner then reads `GetObjectLockConfiguration` back, so a provider that accepts the header and ignores it does not get a lock bucket. Without one, the object lock tests are reported as `skip` with the reason.
+
+Every retention the tests set is `GOVERNANCE`, which the bucket owner may bypass, so each test deletes what it locked and the run can delete the bucket. `COMPLIANCE` retention cannot be removed before it runs out and is not exercised. The credentials need `s3:BypassGovernanceRetention`.
+
 ## Consistency expectations
 
 Object operations are checked immediately: S3 gives read-after-write and read-after-delete consistency for objects, so a GET after a DELETE must be 404 at once.
@@ -83,7 +89,7 @@ A GET after a bucket-configuration delete must fail with the S3 error code for a
 
 ## Operations Tested
 
-**94 tests** across 5 categories:
+**107 tests** across 6 categories:
 
 ### Object (37)
 PutObject (round trip of ETag and length; metadata; SHA-256 checksum echoed; a wrong SHA-256 checksum rejected; SSE-S3 reported back; a non-default storage class reported back), GetObject (body; missing key is 404 NoSuchKey; Range with Content-Range), HeadObject, DeleteObject (gone afterwards; deleting a missing key succeeds), CopyObject (body; MetadataDirective=REPLACE; x-amz-copy-source-if-match with a matching and a wrong ETag; conditional copy of a multipart object with its composite ETag), RenameObject (source gone, destination has the body; If-None-Match: * on an existing destination is 412; a source with a leading slash or the bucket name in front is a different key: 404 NoSuchKey when it does not exist, renamed when it does), conditional GETs (If-Match, If-None-Match, If-Modified-Since, If-Unmodified-Since, each with a case that must read and a case that must be 304 or 412), conditional writes (PutObject with If-None-Match: * and with If-Match, each with the refused case), object tagging (put read back, get, delete leaves no tags), object ACL (put read back, get), ListObjects, ListObjectsV2 (basic with sizes and ETags, pagination to the end, delimiter with common prefixes and a top-level key, start-after), DeleteObjects (verbose and quiet, objects gone), RestoreObject
@@ -93,6 +99,9 @@ HeadBucket (and 404 for a missing bucket), ListBuckets, GetBucketLocation, Creat
 
 ### Versioning (10), on the versioned bucket
 GetBucketVersioning reports Enabled, PutBucketVersioning Enabled again succeeds, PutObject returns distinct version ids and the current body, GetObject and HeadObject by versionId, ListObjectVersions newest first with one IsLatest, DeleteObject by versionId removes that version only, object tagging by versionId (put tags one version only and creates no version; get per version; delete one version's tags only)
+
+### Object Lock (13), on the Object Lock bucket
+GetObjectLockConfiguration (Enabled, with versioning on; a bucket without Object Lock is 404 ObjectLockConfigurationNotFoundError), PutObjectRetention (read back by GetObjectRetention and HeadObject; a later date extends it; a date in the past is 400 InvalidArgument; a bucket without Object Lock is 400 InvalidRequest; shortening is 403 AccessDenied without the governance bypass and applied with it), PutObject with the lock headers (retention and legal hold stored), DeleteObject of a locked version (403 AccessDenied, while a delete without a version id still adds a delete marker; deleted with the governance bypass), DeleteObjects (AccessDenied for the locked key only; deleted with the bypass), PutObjectLegalHold (ON and OFF read back by GetObjectLegalHold and HeadObject; a held version is 403 AccessDenied even with the bypass, and deletable once the hold is off), PutObjectLockConfiguration (default retention read back and applied to a new version)
 
 ### Multipart (8)
 CreateMultipartUpload (listed afterwards), UploadPart (ETag), ListParts (number, size, ETag), CompleteMultipartUpload (full length, composite ETag, bytes at the part boundary), CompleteMultipartUpload with parts out of order is InvalidPartOrder, AbortMultipartUpload (ListParts is then NoSuchUpload), ListMultipartUploads, UploadPartCopy (completed object has the source length)

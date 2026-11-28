@@ -176,6 +176,39 @@ func (p *Provider) CreateVersionedBucket(ctx context.Context, client *s3.Client,
 	}
 }
 
+// CreateLockBucket creates a bucket with S3 Object Lock enabled, which also
+// turns object versioning on, and returns an error that says why when the
+// provider cannot.
+func (p *Provider) CreateLockBucket(ctx context.Context, client *s3.Client, name string) error {
+	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket:                     aws.String(name),
+		ObjectLockEnabledForBucket: aws.Bool(true),
+	}); err != nil {
+		return fmt.Errorf("create bucket: %w", err)
+	}
+	// A provider that ignores the header creates a plain bucket, so read the
+	// configuration back. Bucket settings are eventually consistent on S3.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		out, err := client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: aws.String(name)})
+		if err == nil && out.ObjectLockConfiguration != nil &&
+			out.ObjectLockConfiguration.ObjectLockEnabled == types.ObjectLockEnabledEnabled {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("get object lock configuration: %w", err)
+			}
+			return fmt.Errorf("object lock is not enabled after creating the bucket with it")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // LoadProviders reads env vars and returns providers that have credentials configured.
 // If names is non-empty, only those named providers are returned.
 func LoadProviders(names []string) []Provider {
