@@ -14,5 +14,6 @@ func All() []TestDef {
 	all = append(all, ObjectLockTests()...)
 	all = append(all, MultipartTests()...)
 	all = append(all, PresignedTests()...)
+	all = append(all, STSTests()...)
 	return all
 }

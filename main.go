@@ -108,6 +108,27 @@ func runProvider(ctx context.Context, p *Provider) ProviderReport {
 		Region:        p.Region,
 	}
 
+	// The sts category mints temporary credentials and signs S3 requests with
+	// them. It skips on a provider without an STS endpoint.
+	if stsClient, err := p.NewSTSClient(ctx, p.AccessKey, p.SecretKey, ""); err != nil {
+		env.STSErr = err.Error()
+	} else if stsClient == nil {
+		env.STSErr = "the provider has no AWS STS endpoint"
+	} else {
+		env.STS = stsClient
+		env.NewSession = func(accessKey, secretKey, sessionToken string) (*tests.Session, error) {
+			s3Client, err := p.newClient(ctx, accessKey, secretKey, sessionToken)
+			if err != nil {
+				return nil, err
+			}
+			stsClient, err := p.NewSTSClient(ctx, accessKey, secretKey, sessionToken)
+			if err != nil {
+				return nil, err
+			}
+			return &tests.Session{Client: s3Client, PresignClient: s3.NewPresignClient(s3Client), STS: stsClient}, nil
+		}
+	}
+
 	// A second bucket with versioning on, for the versioning category. The
 	// provider decides how it is created; when that fails the category skips.
 	versioned := bucket + "-v"

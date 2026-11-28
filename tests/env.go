@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithy "github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -33,6 +34,27 @@ type Env struct {
 	// LockBucketErr says why.
 	LockBucket    string
 	LockBucketErr string
+
+	// STS is the provider's AWS STS client, signed with the long-lived key.
+	// Nil when the provider has no STS endpoint; the sts tests then skip and
+	// STSErr says why. NewSession builds the clients of a temporary
+	// credential, configured for the provider like Client is.
+	STS        *sts.Client
+	STSErr     string
+	NewSession func(accessKey, secretKey, sessionToken string) (*Session, error)
+
+	// sessions holds the temporary credentials minted so far, one per policy,
+	// so the sts tests share them instead of minting one each.
+	sessions map[string]*Session
+}
+
+// Session is the set of clients signed with one temporary credential.
+type Session struct {
+	Client        *s3.Client
+	PresignClient *s3.PresignClient
+	STS           *sts.Client
+
+	AccessKey, SecretKey, Token string
 }
 
 // TestDef defines a single test to run.
