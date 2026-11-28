@@ -400,20 +400,27 @@ func testSessionDeniedBucket(ctx context.Context, env *Env) TestResult {
 	if r := needSTS(env); r != nil {
 		return *r
 	}
-	// The second bucket of the run is the one the policy does not name.
-	if r := needVersioned(env); r != nil {
-		return *r
-	}
 	s, err := session(ctx, env, sessionReadWrite)
 	if err != nil {
 		return Error(err.Error())
 	}
-	key := "sts-other-bucket"
-	defer deleteAllVersions(ctx, env, key)
-	if _, err := putBody(ctx, env, env.VersionedBucket, key, "x"); err != nil {
+	// A bucket the policy does not name: the versioned bucket of the run, or
+	// a plain one made here when the provider could not create that.
+	other, key := env.VersionedBucket, "sts-other-bucket"
+	if other == "" {
+		other = env.Bucket + "-o"
+		if _, err := env.Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(other)}); err != nil {
+			return Error("create a second bucket: " + err.Error())
+		}
+		defer env.Client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(other)})
+		defer env.Client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(other), Key: aws.String(key)})
+	} else {
+		defer deleteAllVersions(ctx, env, key)
+	}
+	if _, err := putBody(ctx, env, other, key, "x"); err != nil {
 		return Error("put: " + err.Error())
 	}
-	_, err = readBody(ctx, s.Client, env.VersionedBucket, key)
+	_, err = readBody(ctx, s.Client, other, key)
 	return expectFailure(err, "GetObject in a bucket the session policy does not name", 0, "AccessDenied")
 }
 
