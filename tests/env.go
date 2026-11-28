@@ -28,6 +28,13 @@ type Env struct {
 	VersionedBucket    string
 	VersionedBucketErr string
 
+	// LockBucket is a third bucket created with S3 Object Lock enabled
+	// (CreateBucket with x-amz-bucket-object-lock-enabled). Empty when the
+	// provider could not create one; the object lock tests then skip and
+	// LockBucketErr says why.
+	LockBucket    string
+	LockBucketErr string
+
 	// STS is the provider's AWS STS client, signed with the long-lived key.
 	// Nil when the provider has no STS endpoint; the sts tests then skip and
 	// STSErr says why. NewSession builds the clients of a temporary

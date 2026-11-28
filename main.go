@@ -142,6 +142,21 @@ func runProvider(ctx context.Context, p *Provider) ProviderReport {
 		defer cleanupBucket(ctx, client, versioned)
 	}
 
+	// A third bucket with Object Lock on, for the object-lock category.
+	locked := bucket + "-l"
+	if err := p.CreateLockBucket(ctx, client, locked); err != nil {
+		fmt.Printf("No object lock bucket (%s): object lock tests will skip\n", err)
+		env.LockBucketErr = err.Error()
+		_, _ = client.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(locked)})
+	} else {
+		fmt.Printf("Using object lock bucket: %s\n", locked)
+		env.LockBucket = locked
+		defer cleanupBucket(ctx, client, locked)
+		// Runs first: a version a failed test left locked would keep the
+		// bucket from being deleted.
+		defer releaseLockedVersions(ctx, client, locked)
+	}
+
 	allTests := tests.All()
 	for _, t := range allTests {
 		if onlyTests != nil && !onlyTests[t.Name] {
@@ -175,6 +190,30 @@ func runProvider(ctx context.Context, p *Provider) ProviderReport {
 
 	pr.Tally()
 	return pr
+}
+
+// releaseLockedVersions deletes every version of an object lock bucket that
+// the tests left behind: it turns a legal hold off and deletes with the
+// governance bypass. The tests only ever set GOVERNANCE retention, which the
+// bucket owner may bypass.
+func releaseLockedVersions(ctx context.Context, client *s3.Client, bucket string) {
+	paginator := s3.NewListObjectVersionsPaginator(client, &s3.ListObjectVersionsInput{Bucket: aws.String(bucket)})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return
+		}
+		for _, v := range page.Versions {
+			_, _ = client.PutObjectLegalHold(ctx, &s3.PutObjectLegalHoldInput{
+				Bucket: aws.String(bucket), Key: v.Key, VersionId: v.VersionId,
+				LegalHold: &types.ObjectLockLegalHold{Status: types.ObjectLockLegalHoldStatusOff},
+			})
+			_, _ = client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(bucket), Key: v.Key, VersionId: v.VersionId,
+				BypassGovernanceRetention: aws.Bool(true),
+			})
+		}
+	}
 }
 
 func cleanupBucket(ctx context.Context, client *s3.Client, bucket string) {
