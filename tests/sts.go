@@ -463,19 +463,28 @@ func testSessionMissingToken(ctx context.Context, env *Env) TestResult {
 	return expectFailure(err, "GetObject signed with a session key and no token", 0, "InvalidAccessKeyId")
 }
 
+// alterToken changes six characters in the middle of a session token and
+// keeps its length. The end is left alone: AWS accepts a token whose last
+// characters were replaced.
+func alterToken(token string) string {
+	b := []byte(token)
+	for i := len(b) / 2; i < len(b)/2+6 && i < len(b); i++ {
+		if b[i] == 'A' {
+			b[i] = 'B'
+		} else {
+			b[i] = 'A'
+		}
+	}
+	return string(b)
+}
+
 func testSessionInvalidToken(ctx context.Context, env *Env) TestResult {
 	if r := needSTS(env); r != nil {
 		return *r
 	}
 	key := "sts-invalid-token"
 	defer deleteObject(ctx, env, key)
-	s, err := sessionWith(ctx, env, key, func(token string) string {
-		end := "AAAAAA"
-		if strings.HasSuffix(token, end) {
-			end = "BBBBBB"
-		}
-		return token[:max(len(token)-len(end), 0)] + end
-	})
+	s, err := sessionWith(ctx, env, key, alterToken)
 	if err != nil {
 		return Error(err.Error())
 	}
