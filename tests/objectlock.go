@@ -376,8 +376,12 @@ func testDeleteObjectBypassGovernance(ctx context.Context, env *Env) TestResult 
 	if err != nil {
 		return Error("setup: " + err.Error())
 	}
-	if err := setGovernance(ctx, env, key, v, retainFor(time.Hour), false); err != nil {
+	until := retainFor(time.Hour)
+	if err := setGovernance(ctx, env, key, v, until, false); err != nil {
 		return Error("setup: PutObjectRetention: " + err.Error())
+	}
+	if r := checkRetention(ctx, env, key, v, until); r.Status != StatusPass {
+		return r
 	}
 	if _, err := env.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(env.LockBucket), Key: aws.String(key), VersionId: aws.String(v),
